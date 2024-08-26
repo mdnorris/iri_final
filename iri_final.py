@@ -658,7 +658,7 @@ def frontend_main():
 
         ## Display a color coding legend for the completed data display
         st.markdown('### Color Coding Key')
-        st.image('./item_recommender/iri_metrics_legend.png')
+        st.image(<script src="https://gist.github.com/mdnorris/865d30dfc324cea5a7cc44260d05751f.js"></script>)
 
         # Converts the metrics table to a dataframe
         # st.dataframe(finalOutputMetrics)
