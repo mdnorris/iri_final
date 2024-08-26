@@ -658,7 +658,8 @@ def frontend_main():
 
         ## Display a color coding legend for the completed data display
         st.markdown('### Color Coding Key')
-        st.image("https://gist.github.com/mdnorris/865d30dfc324cea5a7cc44260d05751f.js")
+        ## st.image("https://gist.github.com/mdnorris/865d30dfc324cea5a7cc44260d05751f.js")
+        st.text("Blue good, green pretty good, yellow iffy, red not to be trusted")
 
         # Converts the metrics table to a dataframe
         # st.dataframe(finalOutputMetrics)
