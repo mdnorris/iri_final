@@ -16,7 +16,7 @@ import numpy as np
 
 # from datawig import SimpleImputer
 # from mxnet.base import MXNetError
-# testing automatic push
+
 # Set up tiktoken encoding
 encoding = tiktoken.encoding_for_model("gpt-4o")
 
@@ -43,11 +43,10 @@ def column_Mapping_backend(column_mapping):
         try:
             column_mapping_copy = column_mapping.copy()
             column_mapping_copy_str = column_mapping_copy.astype('str')
-            prompt = (
-                f"The following dataset contains a list of column names:\n\n{column_mapping_copy_str}  "
-                f"Some column names with the ADV_ prefix are matching columns to the columns that do not contain the ADV_ prefix.  "
-                f"Can you attempt to pair up the ADV_ prefixed columns with the non ADV_ columns?  Please format your response into tabular dataset that will be easy to read back in python."
-                f"Please only respond with the completed table, with no other commentary. ")
+            prompt = (f"The following dataset contains a list of column names:\n\n{column_mapping_copy_str}  "
+                      f"Some column names with the ADV_ prefix are matching columns to the columns that do not contain the ADV_ prefix.  "
+                      f"Can you attempt to pair up the ADV_ prefixed columns with the non ADV_ columns?  Please format your response into tabular dataset that will be easy to read back in python."
+                      f"Please only respond with the completed table, with no other commentary. ")
 
             response = client.chat.completions.create(
                 model='gpt-4o-2',
@@ -55,8 +54,7 @@ def column_Mapping_backend(column_mapping):
                 max_tokens=1500,
                 temperature=1,
                 messages=[
-                    {"role": "system",
-                     "content": "You are a model that is used to assist in analyzing datasets."},
+                    {"role": "system", "content": "You are a model that is used to assist in analyzing datasets."},
                     {"role": "user", "content": prompt}
                 ]
             )
@@ -70,8 +68,7 @@ def column_Mapping_backend(column_mapping):
                 # time.sleep(5)
         else:
             print('API is not responding, all retries exhausted. Raising exception...')
-            raise ValueError(
-                "Time out error - try restarting the script and checking your connection to OpenAI Studio")
+            raise ValueError("Time out error - try restarting the script and checking your connection to OpenAI Studio")
 
     # rows = data_out.split('\n')
     # data_out_series = pd.Series(rows[1:])
@@ -110,12 +107,15 @@ def backend_plus(df_input, column_mapping, issues=['?', 'NA', '-']):
 
     """
     # Now that the original nulls are filled, create new nulls where there are data issues like missing categories
-    # Do not attempt to fill UPC or Item Code columns if there are issues or if
+    # Do not attempt to fill UPC or Item Code columns if there are issues or if 
     # the issue is in a Circana-sourced column
     # Iterate over each column in the DataFrame
 
     # TESTING - print out df_input's data issues before they get nulled out
     # print(df_input.loc[df_input['Category Name'] == '?'])
+    
+    # Make a copy of the input df to return if the user doesn't need ai imputation
+    df_input_copy = df_input.copy()
 
     for column in df_input.columns:
         # Replace data issues if they're not in the excluded columns
@@ -123,10 +123,9 @@ def backend_plus(df_input, column_mapping, issues=['?', 'NA', '-']):
             df_input[column] = df_input[column].replace(to_replace=issues, value=np.nan)
 
     # If there are no issues present, then skip the rest of the function and return the df
-    if df_input.isnull().sum().sum() == 0:
-        print(
-            "No data issues were detected. All null values have been filled using column mapping.")
-        return df_input, None  # Return no metrics if there were no addtional imputations performed
+    if df_input.isnull().sum().sum() == 0 or ai_check is False:
+        print("No data issues were detected. All null values have been filled using column mapping.")
+        return df_input_copy, None  # Return no metrics if there were no addtional imputations performed and the untouched input df
 
     # Reset index to hopefully avoid issues and create an additional index column
     df_input.reset_index(inplace=True, drop=False)
@@ -168,8 +167,7 @@ def backend_plus(df_input, column_mapping, issues=['?', 'NA', '-']):
             # Can't get the logprobs for this imputation from a followup, so just inlcude them in the same call
             # seed=42, # Attempt to rein in unpredictability using a random seed
             messages=[
-                {"role": "system",
-                 "content": "You are a model used to impute missing data."},
+                {"role": "system", "content": "You are a model used to impute missing data."},
                 # Try out different language to avoid imputation tactics on the part of the model
                 {"role": "user", "content": prompt}
             ]
@@ -212,32 +210,28 @@ def backend_plus(df_input, column_mapping, issues=['?', 'NA', '-']):
         # StringIO converts the trimmed response string to a file pandas read_csv can convert to a dataframe
         # Add try-except logic here to try the api call again in case of unpredictable results in getting logprobs
         try:
-            output_df_metrics = pd.read_csv(
-                StringIO(output_strings[1][output_start_metrics:output_end_metrics]),
-                delimiter='|', index_col=[0, -1], skiprows=[
+            output_df_metrics = pd.read_csv(StringIO(output_strings[1][output_start_metrics:output_end_metrics]),
+                                            delimiter='|', index_col=[0, -1], skiprows=[
                     1])  # Skip the first row where the model keeps putting dash marks, and the last row to avoid duplicates
 
             # Strip the whitespaces from the metrics column names
             output_df_metrics.rename(columns=lambda x: x.strip(), inplace=True)
 
             # Add a column where the logprobs are converted to probabilities
-            output_df_metrics['prob'] = round(
-                np.exp(output_df_metrics['logprob'].astype(float)), 2)
+            output_df_metrics['prob'] = round(np.exp(output_df_metrics['logprob'].astype(float)), 2)
         except:
             continue
 
         # Check the token length of the output
         # If the limit of 5000 tokens was hit, use the followup prompt to complete the output
         if len(encoding.encode(output)) >= 5000:
-            print(
-                f'Token limit hit ({encoding.encode(output)} > 5000). Followup response:')
+            print(f'Token limit hit ({encoding.encode(output)} > 5000). Followup response:')
             response_followup = client.chat.completions.create(
                 model=deployment_name,
                 temperature=1.1,
                 # Try raising this to suppress the "I can't generate data" response. Don't tune the top_p param while tuning this one
                 messages=[
-                    {"role": "system",
-                     "content": "You are a model used to impute missing data."},
+                    {"role": "system", "content": "You are a model used to impute missing data."},
                     # Try out different language to avoid imputation tactics on the part of the model
                     {"role": "user", "content": followup_prompt}
                 ]
@@ -246,37 +240,31 @@ def backend_plus(df_input, column_mapping, issues=['?', 'NA', '-']):
             # Process output from AI
             # First, split the string so the metric extraction doesn't interfere with imputation extraction
             output_followup = response_followup.choices[0].message.content
-            output_strings_followup = output_followup.split('### Logprobs Table',
-                                                            maxsplit=1)
+            output_strings_followup = output_followup.split('### Logprobs Table', maxsplit=1)
 
             # Now pull the metrics out of the appropiate output string and get it into a useful format using StringIO again
             # Again, use the try-except logic here too
             try:
-                output_start_metrics_followup = output_strings_followup[1].find(
-                    '| index |')
+                output_start_metrics_followup = output_strings_followup[1].find('| index |')
                 output_end_metrics_followup = output_strings_followup[1].rfind('|')
 
                 # StringIO converts the trimmed response string to a file pandas read_csv can convert to a dataframe
                 output_df_metrics_followup = pd.read_csv(
-                    StringIO(output_strings_followup[1][
-                             output_start_metrics_followup:output_end_metrics_followup]),
+                    StringIO(output_strings_followup[1][output_start_metrics_followup:output_end_metrics_followup]),
                     delimiter='|', index_col=[0, -1], skiprows=[
                         1])  # Skip the first row where the model keeps putting dash marks, and the last row to avoid duplicates
 
                 # Strip the whitespaces from the metrics column names
-                output_df_metrics_followup.rename(columns=lambda x: x.strip(),
-                                                  inplace=True)
+                output_df_metrics_followup.rename(columns=lambda x: x.strip(), inplace=True)
 
                 # Add a column where the logprobs are converted to probabilities
-                output_df_metrics_followup['prob'] = round(
-                    np.exp(output_df_metrics_followup['logprob'].astype(float)),
-                    2)
+                output_df_metrics_followup['prob'] = round(np.exp(output_df_metrics_followup['logprob'].astype(float)),
+                                                           2)
             except:
                 continue
 
             # Paste the trimmed output from the followup into the main output string
-            output_followup_cleaned = re.search(pattern='| index |(.*)| INCLUDE    |',
-                                                string=output_followup).group(1)
+            output_followup_cleaned = re.search(pattern='| index |(.*)| INCLUDE    |', string=output_followup).group(1)
             output = output + output_followup_cleaned
 
             # Append the additional metrics data to the main metrics table
@@ -287,8 +275,7 @@ def backend_plus(df_input, column_mapping, issues=['?', 'NA', '-']):
         output_end = output_strings[0].rfind('|INCLUDE    |')
 
         # StringIO converts the trimmed response string to a file pandas read_csv can convert to a dataframe
-        df_response = pd.read_csv(StringIO(output_strings[0][output_start:output_end]),
-                                  delimiter='|',
+        df_response = pd.read_csv(StringIO(output_strings[0][output_start:output_end]), delimiter='|',
                                   index_col=[0, -1], skiprows=[
                 1])  # Skip the first row where the model keeps putting dash marks, and the last row to avoid duplicates
 
@@ -414,10 +401,19 @@ def frontend_main():
     savedColumnsDisplayed = []
     inputDF_Nulls = []
     columnsDisplayed_openAI = []
-
+    
     # Initialize the instruction text block so it can be deleted after imputation starts
     instructions = st.empty()
-
+    
+    # Add a checkbox that disappears once the imputation button is hit to get around the ai imputation if desired
+    optional_ai = st.empty()
+    
+    global ai_check
+    
+    ai_check = optional_ai.checkbox(label='Perform AI Imputation?'
+                         ,value=True
+                         )
+    
     # Fill the empty object with text
     instructions.markdown("""
                     ## Getting Started
@@ -427,12 +423,13 @@ def frontend_main():
                     3. Hit the "Add these Pairs to the Saved Column Pairs?" button and check under the Saved Column Pairs section to make sure the column pairs are correct.
                     4. If the pairs are not correct, click the checkbox column on the left to delete a row or click in a cell to alter the text.
                     5. If needed, you can download the column mapping to use again later using the "Download Column Mapping Template" button.
-                    6. Hit the "Begin Imputation" button to get started!
+                    6. If you don't want to perform imputation using AI and only need the column mapping imputation, uncheck the "Perform AI Imputation?" button.
+                    7. Hit the "Begin Imputation" button to get started!
                     """)
 
     finalDF = pd.DataFrame()
     # df_input = pd.read_csv(uploaded_file, header=0)
-    # finalDF_Nulls = pd.DataFrame()
+    # finalDF_Nulls = pd.DataFrame() 
 
     # Once a file has been uploaded, triggers this portion of the code
     if uploaded_file is not None:
@@ -440,12 +437,10 @@ def frontend_main():
         finalDF = df_input
 
         df_input_copy = df_input.copy()
-        df_input_copy.replace(['NA', 'N/A', 'n/a', 'null', np.nan, 'NAN'], 'NaN',
-                              inplace=True)
+        df_input_copy.replace(['NA','N/A', 'n/a', 'null', np.nan, 'NAN'], 'NaN', inplace = True)
 
         inputDF_Nulls = df_input.isna()
-
-        # finalDF_withFormatting = finalDF
+        #finalDF_withFormatting = finalDF
 
         def color_null(val):
             background_color = '#d65f5f' if val == 'NaN' else 'white'
@@ -480,22 +475,18 @@ def frontend_main():
             st.session_state["columnMapping_AI"] = False
 
         if (st.session_state["columnMapping_AI"] is not None):
-            st.sidebar.write(
-                "**Below are the Column Mappings that were Auto Generated.**")
+            st.sidebar.write("**Below are the Column Mappings that were Auto Generated.**")
             st.sidebar.write(st.session_state["columnsList_AI"])
 
             # saved_columns.append(df_template_input)
-            if (st.sidebar.button("**Add these Pairs to the Saved Column Pairs?**",
-                                  disabled=st.session_state.button2)):
+            if (st.sidebar.button("**Add these Pairs to the Saved Column Pairs?**", disabled=st.session_state.button2)):
                 st.sidebar.write("If any are not correct, you can remove them below.")
                 # st.session_state.button2 = True
                 for i in st.session_state["columnsList_AI"].index:
                     saved_template_columns.append(
-                        [st.session_state["columnsList_AI"].iloc[i, 0],
-                         st.session_state["columnsList_AI"].iloc[i, 1]])
+                        [st.session_state["columnsList_AI"].iloc[i, 0], st.session_state["columnsList_AI"].iloc[i, 1]])
                     st.session_state["columnsList"].append(
-                        [st.session_state["columnsList_AI"].iloc[i, 0],
-                         st.session_state["columnsList_AI"].iloc[i, 1]])
+                        [st.session_state["columnsList_AI"].iloc[i, 0], st.session_state["columnsList_AI"].iloc[i, 1]])
                 st.sidebar.success("**Selected columns saved!**")
 
         # Check if the DataFrame is not empty and contains columns
@@ -512,39 +503,32 @@ def frontend_main():
             columnsDisplayed.columns = ["Column Names"]
 
             # section where the user can upload a template file of column mappings
-            template_file = st.sidebar.file_uploader("**Upload a template file**",
-                                                     type=["csv"],
+            template_file = st.sidebar.file_uploader("**Upload a template file**", type=["csv"],
                                                      disabled=st.session_state.button1)  # , on_change=saved_columns.clear())
             if (template_file is not None):
                 df_template_input = pd.read_csv(template_file, header=0)
                 st.sidebar.write(df_template_input)
 
                 # saved_columns.append(df_template_input)
-                if (st.sidebar.button("**Add columns to Saved Column Pairs?**",
-                                      disabled=st.session_state.button2)):
+                if (st.sidebar.button("**Add columns to Saved Column Pairs?**", disabled=st.session_state.button2)):
                     # st.session_state.button2 = True
                     for i in df_template_input.index:
-                        saved_template_columns.append(
-                            [df_template_input.iloc[i, 0], df_template_input.iloc[i, 1]])
+                        saved_template_columns.append([df_template_input.iloc[i, 0], df_template_input.iloc[i, 1]])
                         st.session_state["columnsList"].append(
                             [df_template_input.iloc[i, 0], df_template_input.iloc[i, 1]])
                     st.sidebar.success("**Selected columns saved!**")
 
             # Add two dropdown lists for column selection
             st.sidebar.header("Select Columns")
-            column1 = st.sidebar.selectbox("**Select First Column**",
-                                           df_input.columns.tolist(), key="column1",
+            column1 = st.sidebar.selectbox("**Select First Column**", df_input.columns.tolist(), key="column1",
                                            disabled=st.session_state.button1)
-            column2 = st.sidebar.selectbox("**Select Second Column**",
-                                           df_input.columns.tolist(), key="column2",
+            column2 = st.sidebar.selectbox("**Select Second Column**", df_input.columns.tolist(), key="column2",
                                            disabled=st.session_state.button1)
 
             # Add a button to save selected columns
-            if st.sidebar.button("**Save Selected Columns**", key=3,
-                                 disabled=st.session_state.button1):
+            if st.sidebar.button("**Save Selected Columns**", key=3, disabled=st.session_state.button1):
                 if column1 == column2:
-                    st.sidebar.warning(
-                        "The columns selected must be different. Try again.")
+                    st.sidebar.warning("The columns selected must be different. Try again.")
                 else:
                     # Save the selected columns
                     saved_columns.append([column1, column2])
@@ -552,8 +536,7 @@ def frontend_main():
                     st.sidebar.success("**Selected columns saved!**")
 
             # button to allow the user to reset the saved column pairs
-            if st.sidebar.button('Reset Saved Column Pairs', key=4,
-                                 disabled=st.session_state.button1,
+            if st.sidebar.button('Reset Saved Column Pairs', key=4, disabled=st.session_state.button1,
                                  on_click=reset_saved_columns_pair_callback()):
                 saved_columns.clear()
                 # st.session_state.button2 = False
@@ -561,8 +544,7 @@ def frontend_main():
 
             # makes sure there are a unique set of column pairs for the user
             st.session_state["columnsList"].sort()
-            st.session_state["columnsList"] = list(
-                k for k, _ in itertools.groupby(st.session_state["columnsList"]))
+            st.session_state["columnsList"] = list(k for k, _ in itertools.groupby(st.session_state["columnsList"]))
 
             # Display saved columns at the bottom
             st.sidebar.subheader("**Saved Column Pairs**")
@@ -571,8 +553,7 @@ def frontend_main():
             if (len(savedColumnsDisplayed) > 0):
                 savedColumnsDisplayed.columns = ['From', 'To']
                 # st.sidebar.data_editor(savedColumnsDisplayed, num_rows= "dynamic")
-                savedColumnsDisplayed = st.sidebar.data_editor(savedColumnsDisplayed,
-                                                               num_rows="dynamic")
+                savedColumnsDisplayed = st.sidebar.data_editor(savedColumnsDisplayed, num_rows="dynamic")
                 # st.sidebar.dataframe(savedColumnsDisplayed)
                 # st.sidebar.dataframe(savedColumnsDisplayed)
 
@@ -599,7 +580,7 @@ def frontend_main():
 
         ##pulling in the columns pairs list from the front end section above
         savedColumnMapping = pd.DataFrame(st.session_state["columnsList"])
-        # st.dataframe(savedColumnsDisplayed)
+        #st.dataframe(savedColumnsDisplayed)
 
         # cancels imputation and let's the user start over
         if (st.button('**Cancel**', on_click=cancel_callback())):
@@ -613,12 +594,10 @@ def frontend_main():
         # Prints a message letting the user know imputation has started
         with st.spinner("**Imputing...**"):
             # Column mapping imputation
-            finalOutput = backend_main(df_input=finalDF,
-                                       column_mapping=savedColumnsDisplayed)
+            finalOutput = backend_main(df_input=finalDF, column_mapping=savedColumnsDisplayed)
 
             # OpenAI Imputation
-            finalOutput, finalOutputMetrics = backend_plus(df_input=finalOutput,
-                                                           column_mapping=savedColumnsDisplayed)
+            finalOutput, finalOutputMetrics = backend_plus(df_input=finalOutput, column_mapping=savedColumnsDisplayed)
 
             # kick off the preview section
             # st.write("Here is a quick preview of what the results will look like when finished:")
@@ -643,8 +622,7 @@ def frontend_main():
 
         finalOutput["Item Code"] = finalOutput["Item Code"].astype('int')
 
-        finalOutputMerged = pd.merge(originalDS, finalOutput, how="left",
-                                     on=["Item Code"])
+        finalOutputMerged = pd.merge(originalDS, finalOutput, how="left", on=["Item Code"])
 
         st.success(f"**File saved as {new_filename}**")
 
@@ -658,13 +636,21 @@ def frontend_main():
 
         ## Display a color coding legend for the completed data display
         st.markdown('### Color Coding Key')
-        ## st.image("https://gist.github.com/mdnorris/865d30dfc324cea5a7cc44260d05751f.js")
-        st.text("Blue good, green pretty good, yellow iffy, red not to be trusted")
+        st.markdown("""
+                    :blue[**100% Accuracy**]  
+                    :green[**90% - 99.9% Accuracy**]  
+                    :orange[**75% - 90% Accuracy**]  
+                    :red[**< 75% Accuracy**]
+                    """)
 
-        # Converts the metrics table to a dataframe
-        # st.dataframe(finalOutputMetrics)
-        finalOutputMetrics['imputed field'] = finalOutputMetrics[
-            'imputed field'].str.strip()
+       ## In case the dataset didn't require any additional imputation, make a dummy row in the finalOutputMetrics df to avoid errors
+        # Should probably just make a separate branch for this case eventually
+        if finalOutputMetrics is None:
+           finalOutputMetrics = pd.DataFrame(columns = ["index", "imputed field", "prob"])
+
+       # Converts the metrics table to a dataframe
+        #st.dataframe(finalOutputMetrics)
+        finalOutputMetrics['imputed field'] = finalOutputMetrics['imputed field'].str.strip()
 
         # function to apply the coloring for the metrics
         def apply_background_color(row, formatting_df):
@@ -673,19 +659,18 @@ def frontend_main():
                 if row.name == fmt_row["index"] and (fmt_row["prob"] >= 0.90):
                     col_idx = row.index.get_loc(fmt_row["imputed field"])
                     color[col_idx] = 'background-color: lightgreen'
-                elif row.name == fmt_row["index"] and (
-                        fmt_row["prob"] >= 0.75 and fmt_row["prob"] < 0.90):
+                elif row.name == fmt_row["index"] and (fmt_row["prob"] >= 0.75 and fmt_row["prob"] < 0.90):
                     col_idx = row.index.get_loc(fmt_row["imputed field"])
                     color[col_idx] = 'background-color: lightyellow'
                 elif row.name == fmt_row["index"] and fmt_row["prob"] < 0.75:
                     col_idx = row.index.get_loc(fmt_row["imputed field"])
                     color[col_idx] = 'background-color: lightcoral'
             return color
-
+        
         # function to apply the coloring for the metrics detail section
         def apply_background_color_accuracy_data(value):
             if value == 0:
-                color = 'background-color: darkgray; color: darkgray'  # Hide these cells
+                color = 'background-color: darkgray; color: darkgray' # Hide these cells
             elif value < 75:
                 color = 'background-color: lightcoral'
             elif 75 <= value < 90:
@@ -695,16 +680,16 @@ def frontend_main():
             elif value == 100:
                 color = 'background-color: lightblue'
             else:
-                color = 'background-color: lightgreen'  # If the model returns values above 100% (rare), return light green coloring
+                color = 'background-color: lightgreen' # If the model returns values above 100% (rare), return light green coloring
             return color
 
         ## Builds out the pandas data frame that identifies where the values were null and have been filled in
         inputDFNulls = inputDF_Nulls
-        # inputDFNulls.replace(['?', 'NA', '-','N/A', 'n/a', 'null', 'NaN', 'NAN'], np.nan, inplace = True)
+        #inputDFNulls.replace(['?', 'NA', '-','N/A', 'n/a', 'null', 'NaN', 'NAN'], np.nan, inplace = True)
         finalDFNulls = finalOutput.isna()
         finalDFNullDiff = inputDFNulls.astype(int) - finalDFNulls.astype(int)
 
-        # create a copy of finalDFNullDiff so we can insert the accuracy metrics into it
+        #create a copy of finalDFNullDiff so we can insert the accuracy metrics into it
         df_accuracy_metrics = finalDFNullDiff
         # Iterate over the rows of df_accuracy
         for _, row in finalOutputMetrics.iterrows():
@@ -721,8 +706,7 @@ def frontend_main():
         # Function to apply the light green background for the missing values that were filled in
         def apply_styles(df, mask):
             # Create a styled DataFrame by copying the styles from the mask
-            style = pd.DataFrame('', index=df.index,
-                                 columns=df.columns)  # Initialize an empty style DataFrame
+            style = pd.DataFrame('', index=df.index, columns=df.columns)  # Initialize an empty style DataFrame
             for col in df.columns:
                 style[col] = np.where(mask[col] == 1, 'background-color: lightblue', '')
             return style
@@ -737,16 +721,16 @@ def frontend_main():
 
         # Apply both styles to the DataFrame and create a new styled df to display
         styled_df = finalOutputDisplayed.style \
-            .apply(lambda x: apply_styles(finalOutputDisplayed, finalDFNullDiff),
-                   axis=None) \
+            .apply(lambda x: apply_styles(finalOutputDisplayed, finalDFNullDiff), axis=None) \
             .apply(lambda row: apply_background_color(row, finalOutputMetrics), axis=1)
 
-        # st.dataframe(df_accuracy_metrics)
 
-        # ADV_Brand_Accuracy_test = df_accuracy_metrics["ADV_Brand"][df_accuracy_metrics["ADV_Brand"] != 0]
-        # ADV_Brand_Accuracy_test_value = ADV_Brand_Accuracy_test.mean()
-        # st.write(ADV_Brand_Accuracy_test_value)
-        # st.dataframe(inputDFNulls)
+        #st.dataframe(df_accuracy_metrics)
+
+        #ADV_Brand_Accuracy_test = df_accuracy_metrics["ADV_Brand"][df_accuracy_metrics["ADV_Brand"] != 0]
+        #ADV_Brand_Accuracy_test_value = ADV_Brand_Accuracy_test.mean()
+        #st.write(ADV_Brand_Accuracy_test_value)
+        #st.dataframe(inputDFNulls)
 
         ## This section outputs the final model data with the missing values filled in and colored green in the background to highlight where the data was filled in
         # Same here - but maybe add a try/except block in the future just in case
@@ -760,17 +744,16 @@ def frontend_main():
             },
                          hide_index=True,
                          )
-
+        
         ## This section outputs the final model accuracy metrics data with the missing values filled in and colored green in the background to highlight where the data was filled in
         # Same here - but maybe add a try/except block in the future just in case
-        df_accuracy_metrics_as_percents = df_accuracy_metrics * 100
-
+        df_accuracy_metrics_as_percents = df_accuracy_metrics*100
+        
         # Color code this dataframe as well, just like the one above
-        df_accuracy_metrics_as_percents_output = df_accuracy_metrics_as_percents.style.applymap(
-            apply_background_color_accuracy_data)
-
-        # df_accuracy_metrics_as_percents_output = df_accuracy_metrics_as_percents.applymap(lambda x: f'{int(x)}%' if x != 0 else '--') # Don't display untouched data as zero to avoid confusion
-
+        df_accuracy_metrics_as_percents_output = df_accuracy_metrics_as_percents.style.applymap(apply_background_color_accuracy_data)
+        
+        #df_accuracy_metrics_as_percents_output = df_accuracy_metrics_as_percents.applymap(lambda x: f'{int(x)}%' if x != 0 else '--') # Don't display untouched data as zero to avoid confusion
+        
         with st.expander("**Model Accuracy Data**"):
             st.dataframe(df_accuracy_metrics_as_percents_output, column_config={
                 "Item Code": st.column_config.TextColumn(),
@@ -784,10 +767,10 @@ def frontend_main():
 
         ## Calculate the accuracy metrics dynamically using Jaro-Winkler text similarity
         ##Should probably keep this jaro winkler stuff in case we have to revert back to it.
-        # def calculate_Jaro(x, y):
-        #   return jarowinkler_similarity(str(x), str(y))
+        #def calculate_Jaro(x, y):
+         #   return jarowinkler_similarity(str(x), str(y))
 
-        # finalAccuracyMetrics = pd.DataFrame()
+        #finalAccuracyMetrics = pd.DataFrame()
 
         # Function to calculate mean excluding zeros
         def mean_excluding_zeros(column):
@@ -795,40 +778,39 @@ def frontend_main():
 
         # Apply the function to each column and multiply by 100 to get percentages
         accuracy_percentages = df_accuracy_metrics.apply(mean_excluding_zeros)
-        filtered_accuracy_percentages = accuracy_percentages[
-            accuracy_percentages.index.isin(savedColumnsDisplayed.iloc[:, 1])]
+        filtered_accuracy_percentages = accuracy_percentages[accuracy_percentages.index.isin(savedColumnsDisplayed.iloc[:, 1])]
         filtered_accuracy_percentages = filtered_accuracy_percentages.to_frame().T
-        filtered_accuracy_percentages.columns = [f"{col} Column Accuracy" for col in
-                                                 filtered_accuracy_percentages.columns]
+        filtered_accuracy_percentages.columns = [f"{col} Column Accuracy" for col in filtered_accuracy_percentages.columns]
 
-        # st.write(filtered_accuracy_percentages)
+
+        #st.write(filtered_accuracy_percentages)
 
         # These for loops do the actual calculation by comparing the score pre-imputation to post-imputation (x vs y)
-        # for i in range(len(savedColumnsDisplayed)):
-        #  finalAccuracyMetrics[savedColumnsDisplayed.iloc[i, 1] + " Column Accuracy"] = np.nan
-        # finalOutputMerged[savedColumnsDisplayed.iloc[i, 1] + "_LogProbs"] = finalOutputMerged.apply(
-        #      lambda row: calculate_Jaro(row[savedColumnsDisplayed.iloc[i, 0] + '_x'],
-        #                                 row[savedColumnsDisplayed.iloc[i, 1] + '_y']), axis=1)
+        #for i in range(len(savedColumnsDisplayed)):
+          #  finalAccuracyMetrics[savedColumnsDisplayed.iloc[i, 1] + " Column Accuracy"] = np.nan
+           # finalOutputMerged[savedColumnsDisplayed.iloc[i, 1] + "_LogProbs"] = finalOutputMerged.apply(
+          #      lambda row: calculate_Jaro(row[savedColumnsDisplayed.iloc[i, 0] + '_x'],
+          #                                 row[savedColumnsDisplayed.iloc[i, 1] + '_y']), axis=1)
 
         # Output the metrics in a dataframe to be displayed on the frontend
-        # for i in range(len(savedColumnsDisplayed)):
+        #for i in range(len(savedColumnsDisplayed)):
         #    finalAccuracyMetrics.loc[0, savedColumnsDisplayed.iloc[i, 1] + " Column Accuracy"] = \
         #        finalOutputMerged[finalOutputMerged[savedColumnsDisplayed.iloc[i, 1] + '_x'].isnull()][
-        #           savedColumnsDisplayed.iloc[i, 1] + '_LogProbs'].mean()
+         #           savedColumnsDisplayed.iloc[i, 1] + '_LogProbs'].mean()
+
 
         ## Second, display the accuracy metrics
         # Set up the section header and the number of columns for the metrics to be outputted in
         st.subheader("Model Metrics")
         col_num = 0  # This is used to count iteration number later
         col1, col2, col3, col4 = st.columns(4)
-        output_columns = [col1, col2, col3,
-                          col4]  # Needed an iterable list of these variables
+        output_columns = [col1, col2, col3, col4]  # Needed an iterable list of these variables
+
 
         # Dynamically loop through each column that gets imputed in and use the col list above to output metrics
         # The n col variables can be reused
         for i, n in enumerate(filtered_accuracy_percentages.columns):
-            output_columns[col_num].metric(f"**{n} %**", "{:.00%}".format(
-                filtered_accuracy_percentages.loc[0, n]))
+            output_columns[col_num].metric(f"**{n} %**", "{:.00%}".format(filtered_accuracy_percentages.loc[0, n]))
             # Check to see if i has reached 4 or a number divisible by 4
             # This means a new output row needs to be started on the frontend and the col variables can be overwritten
             if (i + 1) % 4 == 0:
